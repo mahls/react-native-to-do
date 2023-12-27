@@ -1,101 +1,204 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet } from 'react-native';
+import { useState, useEffect } from "react";
+import {
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import Constants from "expo-constants";
+import * as SQLite from "expo-sqlite";
 
-const TodoApp = () => {
-  const [todos, setTodos] = useState([]);
-  const [newTodo, setNewTodo] = useState('');
+function openDatabase() {
+  if (Platform.OS === "web") {
+    return {
+      transaction: () => {
+        return {
+          executeSql: () => {},
+        };
+      },
+    };
+  }
 
-  const addTodo = () => {
-    if (newTodo.trim() !== '') {
-      setTodos([...todos, { id: Date.now().toString(), text: newTodo }]);
-      setNewTodo('');
-    }
-  };
+  const db = SQLite.openDatabase("db.db");
+  return db;
+}
 
-  const deleteTodo = (id) => {
-    const updatedTodos = todos.filter((todo) => todo.id !== id);
-    setTodos(updatedTodos);
-  };
+const db = openDatabase();
 
-  const renderItem = ({ item }) => (
-      <View style={styles.todoItem}>
-        <Text>{item.text}</Text>
-        <TouchableOpacity onPress={() => deleteTodo(item.id)}>
-          <Text style={styles.deleteButton}>Delete</Text>
-        </TouchableOpacity>
+function Items({ done: doneHeading, onPressItem }) {
+  const [items, setItems] = useState(null);
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      tx.executeSql(
+          `select * from items where done = ?;`,
+          [doneHeading ? 1 : 0],
+          (_, { rows: { _array } }) => setItems(_array)
+      );
+    });
+  }, []);
+
+  const heading = doneHeading ? "Completed" : "Todo";
+
+  if (items === null || items.length === 0) {
+    return null;
+  }
+
+  return (
+      <View style={styles.sectionContainer}>
+        <Text style={styles.sectionHeading}>{heading}</Text>
+        {items.map(({ id, done, value }) => (
+            <TouchableOpacity
+                key={id}
+                onPress={() => onPressItem && onPressItem(id)}
+                style={{
+                  backgroundColor: done ? "#1c9963" : "#fff",
+                  borderColor: "#000",
+                  borderWidth: 1,
+                  padding: 8,
+                }}
+            >
+              <Text style={{ color: done ? "#fff" : "#000" }}>{value}</Text>
+            </TouchableOpacity>
+        ))}
       </View>
   );
+}
+
+export default function App() {
+  const [text, setText] = useState(null);
+  const [forceUpdate, forceUpdateId] = useForceUpdate();
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      tx.executeSql(
+          "create table if not exists items (id integer primary key not null, done int, value text);"
+      );
+    });
+  }, []);
+
+  const add = (text) => {
+    // is text empty?
+    if (text === null || text === "") {
+      return false;
+    }
+
+    db.transaction(
+        (tx) => {
+          tx.executeSql("insert into items (done, value) values (0, ?)", [text]);
+          tx.executeSql("select * from items", [], (_, { rows }) =>
+              console.log(JSON.stringify(rows))
+          );
+        },
+        null,
+        forceUpdate
+    );
+  };
 
   return (
       <View style={styles.container}>
-        <Text style={styles.title}>Todo App</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-              style={styles.input}
-              placeholder="Add a new todo"
-              value={newTodo}
-              onChangeText={(text) => setNewTodo(text)}
-          />
-          <TouchableOpacity onPress={addTodo}>
-            <Text style={styles.addButton}>Add</Text>
-          </TouchableOpacity>
-        </View>
-        <FlatList
-            data={todos}
-            keyExtractor={(item) => item.id}
-            renderItem={renderItem}
-            style={styles.list}
-        />
+        <Text style={styles.heading}>SQLite App</Text>
+
+        {Platform.OS === "web" ? (
+            <View
+                style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+            >
+              <Text style={styles.heading}>
+                Expo SQlite is not supported on web!
+              </Text>
+            </View>
+        ) : (
+            <>
+              <View style={styles.flexRow}>
+                <TextInput
+                    onChangeText={(text) => setText(text)}
+                    onSubmitEditing={() => {
+                      add(text);
+                      setText(null);
+                    }}
+                    placeholder="what do you need to do?"
+                    style={styles.input}
+                    value={text}
+                />
+              </View>
+              <ScrollView style={styles.listArea}>
+                <Items
+                    key={`forceupdate-todo-${forceUpdateId}`}
+                    done={false}
+                    onPressItem={(id) =>
+                        db.transaction(
+                            (tx) => {
+                              tx.executeSql(`update items set done = 1 where id = ?;`, [
+                                id,
+                              ]);
+                            },
+                            null,
+                            forceUpdate
+                        )
+                    }
+                />
+                <Items
+                    done
+                    key={`forceupdate-done-${forceUpdateId}`}
+                    onPressItem={(id) =>
+                        db.transaction(
+                            (tx) => {
+                              tx.executeSql(`delete from items where id = ?;`, [id]);
+                            },
+                            null,
+                            forceUpdate
+                        )
+                    }
+                />
+              </ScrollView>
+            </>
+        )}
       </View>
   );
-};
+}
+
+function useForceUpdate() {
+  const [value, setValue] = useState(0);
+  return [() => setValue(value + 1), value];
+}
 
 const styles = StyleSheet.create({
   container: {
+    backgroundColor: "#fff",
     flex: 1,
-    padding: 20,
-    backgroundColor: '#fff',
+    paddingTop: Constants.statusBarHeight,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
+  heading: {
+    fontSize: 20,
+    fontWeight: "bold",
+    textAlign: "center",
   },
-  inputContainer: {
-    flexDirection: 'row',
-    marginBottom: 20,
+  flexRow: {
+    flexDirection: "row",
   },
   input: {
-    flex: 1,
-    height: 40,
-    borderColor: 'gray',
+    borderColor: "#4630eb",
+    borderRadius: 4,
     borderWidth: 1,
-    marginRight: 10,
-    paddingHorizontal: 10,
-  },
-  addButton: {
-    backgroundColor: 'blue',
-    color: 'white',
-    padding: 10,
-    borderRadius: 5,
-    textAlign: 'center',
-    fontWeight: 'bold',
-  },
-  list: {
     flex: 1,
+    height: 48,
+    margin: 16,
+    padding: 8,
   },
-  todoItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ccc',
+  listArea: {
+    backgroundColor: "#f0f0f0",
+    flex: 1,
+    paddingTop: 16,
   },
-  deleteButton: {
-    color: 'red',
+  sectionContainer: {
+    marginBottom: 16,
+    marginHorizontal: 16,
+  },
+  sectionHeading: {
+    fontSize: 18,
+    marginBottom: 8,
   },
 });
-
-export default TodoApp;
-
